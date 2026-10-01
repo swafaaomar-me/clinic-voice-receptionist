@@ -34,7 +34,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null) {
   return {
     get_clinic_info: tool({
       description:
-        "Get the clinic's location, opening hours, parking, payment, insurance and emergency information, in English and Arabic.",
+        "Get the clinic's location, phone number, opening hours, parking, payment, insurance and emergency information, in English and Arabic.",
       inputSchema: z.object({}),
       execute: async () => getClinicInfo(),
     }),

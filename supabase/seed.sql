@@ -64,6 +64,8 @@ join services s on s.name = a.service_name;
 insert into clinic_info (topic, content, content_ar) values
   ('location',  'Smile Dental Clinic, King Fahd Road, Al Olaya, Riyadh.',
                 'عيادة سمايل لطب الأسنان، طريق الملك فهد، حي العليا، الرياض.'),
+  ('phone',     'Call or WhatsApp Smile Dental Clinic on 011 555 0123.',
+                'اتصل أو راسلنا واتساب على رقم عيادة سمايل لطب الأسنان: 011 555 0123.'),
   ('hours',     'Open Saturday to Thursday. Saturday 10 AM to 9 PM, Sunday to Wednesday 9 AM to 9 PM, Thursday 9 AM to 6 PM. Closed on Friday.',
                 'نعمل من السبت إلى الخميس. السبت من 10 صباحاً حتى 9 مساءً، ومن الأحد إلى الأربعاء من 9 صباحاً حتى 9 مساءً، والخميس من 9 صباحاً حتى 6 مساءً. الجمعة مغلق.'),
   ('parking',   'Free parking for patients in front of the clinic.',
