@@ -19,25 +19,39 @@ export function to12Hour(time: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
-/** A plain-English sentence saying whether the clinic is open right now, and when it next opens. */
-export function openingStatus(catalog: Catalog, now: Date = new Date()): string {
+export interface ClinicStatus {
+  isOpen: boolean;
+  /** Short, patient-facing text, e.g. "Open now until 6:00 PM" or "Closed, opens Saturday at 10:00 AM" */
+  label: string;
+}
+
+/** Whether the clinic is open right now, and when it closes or next opens. */
+export function clinicStatus(catalog: Catalog, now: Date = new Date()): ClinicStatus {
   const today = riyadhToday(now);
   const { time } = toRiyadh(now);
   const hours = clinicHoursOn(catalog, weekdayOf(today));
 
   if (hours && time >= hours.open && time < hours.close) {
-    return `The clinic is OPEN right now, until ${to12Hour(hours.close)} today.`;
+    return { isOpen: true, label: `Open now until ${to12Hour(hours.close)}` };
   }
   if (hours && time < hours.open) {
-    return `The clinic is CLOSED right now. It opens today at ${to12Hour(hours.open)}.`;
+    return { isOpen: false, label: `Closed, opens today at ${to12Hour(hours.open)}` };
   }
   for (let i = 1; i <= 7; i++) {
     const date = addDays(today, i);
     const next = clinicHoursOn(catalog, weekdayOf(date));
     if (next) {
-      const when = i === 1 ? "tomorrow" : `on ${weekdayName(date)}`;
-      return `The clinic is CLOSED right now. It opens again ${when} at ${to12Hour(next.open)}.`;
+      const when = i === 1 ? "tomorrow" : weekdayName(date);
+      return { isOpen: false, label: `Closed, opens ${when} at ${to12Hour(next.open)}` };
     }
   }
-  return "The clinic is CLOSED right now.";
+  return { isOpen: false, label: "Closed" };
+}
+
+/** A sentence for Noor's instructions saying whether the clinic is open right now. */
+export function openingStatus(catalog: Catalog, now: Date = new Date()): string {
+  const status = clinicStatus(catalog, now);
+  return status.isOpen
+    ? `The clinic is OPEN right now (${status.label.toLowerCase()}).`
+    : `The clinic is CLOSED right now (${status.label.toLowerCase()}).`;
 }
