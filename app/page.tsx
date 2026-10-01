@@ -5,6 +5,8 @@ import { clinicHoursOn, clinicStatus, to12Hour } from "@/lib/opening-hours";
 import { riyadhToday, weekdayOf } from "@/lib/time";
 import { NoorConversation } from "./_components/NoorConversation";
 import { WeekStrip } from "./_components/WeekStrip";
+import { ChatWidget } from "./_components/ChatWidget";
+import { TalkToNoorButton } from "./_components/TalkToNoorButton";
 
 const WEEK = [
   { weekday: 6, name: "Saturday" },
@@ -58,12 +60,7 @@ export default async function Home() {
           <a href="#dentists" className="hover:text-ink">Dentists</a>
           <a href="#visit" className="hover:text-ink">Visit us</a>
         </nav>
-        <Link
-          href="/chat"
-          className="rounded-full bg-gum px-5 py-2.5 text-[15px] font-medium text-white hover:bg-gum-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gum"
-        >
-          Talk to Noor
-        </Link>
+        <TalkToNoorButton className="rounded-full bg-gum px-5 py-2.5 text-[15px] font-medium text-white hover:bg-gum-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gum" />
       </header>
 
       <main className="flex-1">
@@ -85,12 +82,7 @@ export default async function Home() {
               cancel appointments, in English or Arabic, any time of day.
             </p>
             <div className="mt-9 flex flex-wrap items-center gap-3">
-              <Link
-                href="/chat"
-                className="rounded-full bg-gum px-7 py-3.5 text-base font-medium text-white hover:bg-gum-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gum"
-              >
-                Talk to Noor
-              </Link>
+              <TalkToNoorButton className="rounded-full bg-gum px-7 py-3.5 text-base font-medium text-white hover:bg-gum-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gum" />
               {phone && (
                 <a
                   href={`tel:${phone.replace(/\s/g, "")}`}
@@ -227,6 +219,8 @@ export default async function Home() {
           <p>Built by Swafaa Salim Said Omar</p>
         </div>
       </footer>
+
+      <ChatWidget />
     </div>
   );
 }

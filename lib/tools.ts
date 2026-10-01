@@ -30,7 +30,18 @@ export interface PreparedBooking {
  * Creates Noor's tools for one request. book_appointment only works for the exact
  * booking that was read back to the patient in the previous reply.
  */
-export function createReceptionistTools(prepared: PreparedBooking | null) {
+export function createReceptionistTools(prepared: PreparedBooking | null, patientPhones: string[] = []) {
+  /** Refuses phone numbers the patient never typed, so the AI can't invent or guess one. */
+  const unknownPhone = (phone: string) => {
+    const normalized = normalizeSaudiMobile(phone);
+    if (normalized && patientPhones.includes(normalized)) return null;
+    return {
+      ok: false as const,
+      error:
+        "The patient hasn't given this mobile number. Ask the patient to type their mobile number. Never guess or make up a number.",
+    };
+  };
+
   return {
     get_clinic_info: tool({
       description:
@@ -55,7 +66,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null) {
       description:
         "Check a booking's details WITHOUT saving it. Call this once you know the treatment, dentist, date, time, name and mobile number. Then read the returned details to the patient and ask them to confirm.",
       inputSchema: bookingInput,
-      execute: async (input) => prepareBooking(input),
+      execute: async (input) => unknownPhone(input.patient_phone) ?? prepareBooking(input),
     }),
 
     book_appointment: tool({
@@ -63,6 +74,8 @@ export function createReceptionistTools(prepared: PreparedBooking | null) {
         "Save the booking. Only available after prepare_booking succeeded in your previous reply and the patient has now confirmed. Use exactly the same details.",
       inputSchema: bookingInput,
       execute: async (input) => {
+        const phoneProblem = unknownPhone(input.patient_phone);
+        if (phoneProblem) return phoneProblem;
         if (!prepared) {
           return { ok: false as const, error: "Not booked. Call prepare_booking first and ask the patient to confirm." };
         }
@@ -87,7 +100,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null) {
       inputSchema: z.object({
         patient_phone: z.string().describe("The mobile number used for the booking"),
       }),
-      execute: async (input) => findAppointments(input),
+      execute: async (input) => unknownPhone(input.patient_phone) ?? findAppointments(input),
     }),
 
     cancel_appointment: tool({
@@ -97,7 +110,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null) {
         appointment_id: z.number().int(),
         patient_phone: z.string().describe("The mobile number used for the booking"),
       }),
-      execute: async (input) => cancelAppointment(input),
+      execute: async (input) => unknownPhone(input.patient_phone) ?? cancelAppointment(input),
     }),
   };
 }

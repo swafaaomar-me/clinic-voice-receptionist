@@ -10,7 +10,7 @@ import {
 import { getCatalog } from "@/lib/clinic";
 import { buildInstructions } from "@/lib/receptionist";
 import { createReceptionistTools } from "@/lib/tools";
-import { findPreparedBooking } from "@/lib/booking-guard";
+import { findPreparedBooking, phonesTypedByPatient } from "@/lib/booking-guard";
 
 // Allow up to 30 seconds for the agent to think and use its tools
 export const maxDuration = 30;
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
 
   const catalog = await getCatalog();
   const prepared = findPreparedBooking(messages);
-  const tools = createReceptionistTools(prepared);
+  const tools = createReceptionistTools(prepared, phonesTypedByPatient(messages));
 
   const result = streamText({
     model: google(MODEL),

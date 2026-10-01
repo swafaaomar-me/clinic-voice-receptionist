@@ -1,5 +1,6 @@
 import type { UIMessage } from "ai";
 import type { PreparedBooking } from "./tools";
+import { findSaudiMobiles } from "./phone";
 
 /**
  * Finds the booking Noor read back in her previous reply (a successful prepare_booking).
@@ -28,3 +29,12 @@ export function findPreparedBooking(messages: UIMessage[]): PreparedBooking | nu
   return null;
 }
 
+
+/** Phone numbers the patient has typed themselves anywhere in the conversation. */
+export function phonesTypedByPatient(messages: UIMessage[]): string[] {
+  const text = messages
+    .filter((m) => m.role === "user")
+    .flatMap((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")))
+    .join("\n");
+  return findSaudiMobiles(text);
+}
