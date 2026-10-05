@@ -314,12 +314,20 @@ export async function cancelAppointment(input: { appointment_id: number; patient
     .eq("patient_phone", phone)
     .eq("status", "booked")
     .gte("starts_at", new Date().toISOString())
-    .select("id, starts_at")
+    .select("id, starts_at, patient_name, patient_phone")
     .maybeSingle();
   if (error) fail(`Could not cancel: ${error.message}`);
   if (!data) {
     return { ok: false as const, error: "No upcoming booking with that ID for this phone number." };
   }
   const { date, time } = toRiyadh(new Date(data.starts_at));
-  return { ok: true as const, cancelled_appointment_id: data.id, date, weekday: weekdayName(date), time };
+  return {
+    ok: true as const,
+    cancelled_appointment_id: data.id,
+    date,
+    weekday: weekdayName(date),
+    time,
+    patient_name: data.patient_name as string,
+    patient_phone: data.patient_phone as string,
+  };
 }

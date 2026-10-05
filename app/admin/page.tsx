@@ -6,7 +6,7 @@ import { listUpcomingAppointments, type StaffAppointment } from "@/lib/admin-dat
 import { getCatalog } from "@/lib/clinic";
 import { to12Hour } from "@/lib/opening-hours";
 import { addDays, riyadhToday } from "@/lib/time";
-import { signOut } from "./actions";
+import { AdminHeader } from "./AdminHeader";
 import { CancelButton } from "./CancelButton";
 
 export const metadata: Metadata = { title: "Staff dashboard | Smile Dental Clinic", robots: { index: false } };
@@ -50,24 +50,7 @@ export default async function AdminPage(props: { searchParams: SearchParams }) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="border-b border-line bg-paper">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <div className="leading-tight">
-            <p className="font-semibold">Smile Dental Clinic</p>
-            <p className="text-sm text-ink-soft">Staff dashboard</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className="hidden whitespace-nowrap rounded-full px-4 py-2 text-sm text-ink-soft hover:text-ink sm:inline-block">
-              View website
-            </Link>
-            <form action={signOut}>
-              <button type="submit" className="whitespace-nowrap rounded-full border border-line px-4 py-2 text-sm hover:border-ink/40">
-                Sign out
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
+      <AdminHeader current="/admin" />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-10 sm:px-8">
         <h1 className="text-3xl font-semibold tracking-[-0.01em]">Appointments</h1>

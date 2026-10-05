@@ -76,6 +76,24 @@ create table clinic_info (
   content_ar  text not null
 );
 
+-- One short summary per chat with Noor, for the staff dashboard
+create table conversations (
+  id              bigint generated always as identity primary key,
+  chat_id         text not null unique,
+  started_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  language        text check (language in ('en', 'ar', 'mixed')),
+  outcome         text not null default 'question'
+                  check (outcome in ('booked', 'cancelled', 'question', 'emergency', 'no_action')),
+  summary         text not null,
+  patient_name    text,
+  patient_phone   text,
+  appointment_id  bigint references appointments (id) on delete set null,
+  message_count   integer not null default 0
+);
+
+create index conversations_updated_idx on conversations (updated_at desc);
+
 -- Security: turn on Row Level Security with no public policies.
 -- Browsers can't read or change anything directly; only our own server code
 -- (using the secret key) can access these tables.
@@ -85,3 +103,4 @@ alter table dentist_services  enable row level security;
 alter table working_hours     enable row level security;
 alter table appointments      enable row level security;
 alter table clinic_info       enable row level security;
+alter table conversations     enable row level security;

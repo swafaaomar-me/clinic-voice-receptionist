@@ -92,7 +92,9 @@ function MessagePart({ part }: { part: UIMessage["parts"][number] }) {
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
-  const { messages, sendMessage, status, error, setMessages, regenerate, stop } = useChat();
+  // Each conversation gets its own ID, so "New chat" starts a separate summary for staff
+  const [chatId, setChatId] = useState(() => crypto.randomUUID());
+  const { messages, sendMessage, status, error, regenerate, stop } = useChat({ id: chatId });
   const busy = status === "submitted" || status === "streaming";
   const inputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -167,7 +169,7 @@ export function ChatWidget() {
             type="button"
             onClick={() => {
               stop();
-              setMessages([]);
+              setChatId(crypto.randomUUID());
             }}
             className="rounded-full px-3 py-1.5 text-sm text-ink-soft hover:bg-enamel hover:text-ink"
           >

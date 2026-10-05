@@ -7,7 +7,9 @@ import {
   toUIMessageStream,
   type UIMessage,
 } from "ai";
+import { after } from "next/server";
 import { getCatalog } from "@/lib/clinic";
+import { isValidChatId, saveConversationSummary } from "@/lib/conversations";
 import { buildInstructions } from "@/lib/receptionist";
 import { createReceptionistTools } from "@/lib/tools";
 import { findPreparedBooking, phonesTypedByPatient } from "@/lib/booking-guard";
@@ -19,7 +21,7 @@ export const maxDuration = 30;
 const MODEL = process.env.GEMINI_MODEL ?? "gemini-flash-lite-latest";
 
 export async function POST(req: Request) {
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  const { id: chatId, messages }: { id?: unknown; messages: UIMessage[] } = await req.json();
 
   const catalog = await getCatalog();
   const prepared = findPreparedBooking(messages);
@@ -37,6 +39,24 @@ export async function POST(req: Request) {
     // Let the agent use several tools in a row (e.g. check availability, then answer)
     stopWhen: isStepCount(6),
   });
+
+  // After the reply has been sent, write a short summary of the chat for the staff dashboard
+  if (isValidChatId(chatId)) {
+    after(async () => {
+      try {
+        const [latestReply, toolResults] = await Promise.all([result.text, result.toolResults]);
+        await saveConversationSummary({
+          chatId,
+          messages,
+          latestReply,
+          latestEvents: toolResults.map((r) => ({ toolName: r.toolName, output: r.output })),
+          model: MODEL,
+        });
+      } catch (error) {
+        console.error("Conversation summary failed:", error);
+      }
+    });
+  }
 
   return createUIMessageStreamResponse({
     stream: toUIMessageStream({ stream: result.stream }),

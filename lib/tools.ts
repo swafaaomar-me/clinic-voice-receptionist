@@ -35,6 +35,16 @@ export function createReceptionistTools(prepared: PreparedBooking | null, patien
   const unknownPhone = (phone: string) => {
     const normalized = normalizeSaudiMobile(phone);
     if (normalized && patientPhones.includes(normalized)) return null;
+    if (patientPhones.length > 0) {
+      // Usually a copying slip (e.g. a repeated digit dropped). Show the numbers the patient
+      // really typed so Noor can retry with the right one, instead of asking the patient again.
+      return {
+        ok: false as const,
+        error:
+          `The number ${phone} is not one the patient typed. The patient typed: ${patientPhones.join(", ")}. ` +
+          "If they meant one of these, call this tool again using it exactly, digit for digit, without asking the patient. Never guess or make up a number.",
+      };
+    }
     return {
       ok: false as const,
       error:
