@@ -1,13 +1,16 @@
 import Link from "next/link";
+import { countRecentAlerts } from "@/lib/security";
 import { signOut } from "./actions";
 
 const TABS = [
   { href: "/admin", label: "Appointments" },
   { href: "/admin/conversations", label: "Conversations" },
-];
+  { href: "/admin/security", label: "Security" },
+] as const;
 
 /** Header shared by every staff page, with tabs to switch between them. */
-export function AdminHeader({ current }: { current: "/admin" | "/admin/conversations" }) {
+export async function AdminHeader({ current }: { current: (typeof TABS)[number]["href"] }) {
+  const recentAlerts = await countRecentAlerts();
   return (
     <header className="border-b border-line bg-paper">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 pt-4 sm:px-8">
@@ -29,7 +32,7 @@ export function AdminHeader({ current }: { current: "/admin" | "/admin/conversat
           </form>
         </div>
       </div>
-      <nav aria-label="Staff pages" className="mx-auto mt-3 flex max-w-5xl gap-6 px-5 sm:px-8">
+      <nav aria-label="Staff pages" className="mx-auto mt-3 flex max-w-5xl gap-5 overflow-x-auto px-5 sm:gap-6 sm:px-8">
         {TABS.map((tab) => {
           const active = tab.href === current;
           return (
@@ -37,11 +40,19 @@ export function AdminHeader({ current }: { current: "/admin" | "/admin/conversat
               key={tab.href}
               href={tab.href}
               aria-current={active ? "page" : undefined}
-              className={`border-b-2 pb-3 text-[15px] ${
+              className={`whitespace-nowrap border-b-2 pb-3 text-[15px] ${
                 active ? "border-gum font-semibold text-ink" : "border-transparent text-ink-soft hover:text-ink"
               }`}
             >
               {tab.label}
+              {tab.href === "/admin/security" && recentAlerts > 0 && (
+                <span
+                  className="ml-1.5 rounded-full bg-gum px-1.5 py-0.5 text-xs font-semibold text-white tabular-nums"
+                  aria-label={`${recentAlerts} alerts in the last 24 hours`}
+                >
+                  {recentAlerts}
+                </span>
+              )}
             </Link>
           );
         })}

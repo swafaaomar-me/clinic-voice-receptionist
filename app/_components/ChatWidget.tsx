@@ -48,6 +48,12 @@ function formatDay(date: string) {
 }
 
 /** Renders one part of a message: text, a "working…" line, or a confirmation card. */
+/** True when the server turned the message away on purpose (flooding or a too-long message). */
+function isRefusal(error: Error): boolean {
+  const status = (error as { statusCode?: number }).statusCode;
+  return status === 413 || status === 429;
+}
+
 function MessagePart({ part }: { part: UIMessage["parts"][number] }) {
   if (part.type === "text") {
     return part.text ? <p className="whitespace-pre-wrap">{part.text}</p> : null;
@@ -242,10 +248,17 @@ export function ChatWidget() {
 
         {error && (
           <div className="self-start rounded-xl border border-gum/30 px-4 py-3 text-sm">
-            <p>Noor couldn&apos;t reply just now. This usually clears up in a moment.</p>
-            <button type="button" onClick={() => regenerate()} className="mt-2 font-medium text-gum hover:underline">
-              Try again
-            </button>
+            {isRefusal(error) ? (
+              // The server refused on purpose (too many or too long messages); its message says why
+              <p>{error.message}</p>
+            ) : (
+              <>
+                <p>Noor couldn&apos;t reply just now. This usually clears up in a moment.</p>
+                <button type="button" onClick={() => regenerate()} className="mt-2 font-medium text-gum hover:underline">
+                  Try again
+                </button>
+              </>
+            )}
           </div>
         )}
         <div ref={endRef} />
@@ -267,6 +280,7 @@ export function ChatWidget() {
           value={input}
           dir="auto"
           autoComplete="off"
+          maxLength={1000}
           onChange={(e) => setInput(e.currentTarget.value)}
           placeholder="Type in English or Arabic…"
           className="min-w-0 flex-1 rounded-full border border-line bg-enamel px-4 py-2.5 text-[15px] outline-none focus:border-ink/40"

@@ -318,7 +318,11 @@ export async function cancelAppointment(input: { appointment_id: number; patient
     .maybeSingle();
   if (error) fail(`Could not cancel: ${error.message}`);
   if (!data) {
-    return { ok: false as const, error: "No upcoming booking with that ID for this phone number." };
+    return {
+      ok: false as const,
+      guard: "wrong_phone_for_booking",
+      error: "No upcoming booking with that ID for this phone number.",
+    };
   }
   const { date, time } = toRiyadh(new Date(data.starts_at));
   return {

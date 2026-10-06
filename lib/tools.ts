@@ -40,6 +40,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null, patien
       // really typed so Noor can retry with the right one, instead of asking the patient again.
       return {
         ok: false as const,
+        guard: "phone_slip",
         error:
           `The number ${phone} is not one the patient typed. The patient typed: ${patientPhones.join(", ")}. ` +
           "If they meant one of these, call this tool again using it exactly, digit for digit, without asking the patient. Never guess or make up a number.",
@@ -47,6 +48,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null, patien
     }
     return {
       ok: false as const,
+      guard: "unknown_phone",
       error:
         "The patient hasn't given this mobile number. Ask the patient to type their mobile number. Never guess or make up a number.",
     };
@@ -87,7 +89,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null, patien
         const phoneProblem = unknownPhone(input.patient_phone);
         if (phoneProblem) return phoneProblem;
         if (!prepared) {
-          return { ok: false as const, error: "Not booked. Call prepare_booking first and ask the patient to confirm." };
+          return { ok: false as const, guard: "not_confirmed", error: "Not booked. Call prepare_booking first and ask the patient to confirm." };
         }
         const sameBooking =
           input.service_id === prepared.service_id &&
@@ -98,6 +100,7 @@ export function createReceptionistTools(prepared: PreparedBooking | null, patien
         if (!sameBooking) {
           return {
             ok: false as const,
+            guard: "details_changed",
             error: "Not booked: these details differ from what the patient confirmed. Call prepare_booking with the new details and ask again.",
           };
         }
