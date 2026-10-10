@@ -188,6 +188,27 @@ export async function checkChatLimit(ip: string, chatId: string | null): Promise
   return null;
 }
 
+/** Spoken replies use the AI voice (a limited free quota), so they get their own limit per device. */
+export const SPEAK_LIMIT = { windowSeconds: 10 * 60, max: 40, label: "40 spoken replies in 10 minutes" };
+
+/** Counts one spoken reply for this device. Returns true if the device is over the limit. */
+export async function checkSpeakLimit(ip: string): Promise<boolean> {
+  const { data, error } = await db().rpc("hit_rate_limit", {
+    p_key: `speak:${deviceId(ip)}`,
+    p_window_seconds: SPEAK_LIMIT.windowSeconds,
+  });
+  if (error) throw new Error(error.message);
+  const hits = Number(data);
+  if (hits === SPEAK_LIMIT.max + 1) {
+    await recordSecurityEvent({
+      kind: "chat_rate_limited",
+      ip,
+      details: `A device asked for more than ${SPEAK_LIMIT.label}. Its requests for the AI voice are being refused for now.`,
+    });
+  }
+  return hits > SPEAK_LIMIT.max;
+}
+
 // ---------- Attempts to trick Noor ----------
 
 const TRICK_PATTERNS: { pattern: RegExp; label: string }[] = [

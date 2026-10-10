@@ -30,6 +30,17 @@ export const maxDuration = 30;
 // The model can be changed in .env.local without touching the code
 const MODEL = process.env.GEMINI_MODEL ?? "gemini-flash-lite-latest";
 
+// Added when the patient is talking and will hear Noor's reply read aloud
+const VOICE_INSTRUCTIONS = `
+
+VOICE CONVERSATION
+The patient is speaking to you, and your reply will be read aloud by the browser.
+- Keep each reply to one or two short sentences. Offer at most three times at once.
+- No lists, bullet points, symbols or emoji. Write prices as "250 riyals" (or "250 ريال").
+- Their words were turned into text by speech recognition, so names and numbers may be slightly wrong.
+  Always include the name and mobile number when you read a booking back, so the patient can correct them.
+- If something they said doesn't make sense, ask them to repeat it instead of guessing.`;
+
 /** Text the patient typed in a message. */
 function textOf(message: UIMessage | undefined): string {
   return (message?.parts ?? []).map((p) => (p.type === "text" ? p.text : "")).join("\n");
@@ -61,13 +72,14 @@ export async function POST(req: Request) {
     return refuse(413, "That message is too long.");
   }
 
-  let body: { id?: unknown; messages?: unknown };
+  let body: { id?: unknown; messages?: unknown; voice?: unknown };
   try {
     body = await req.json();
   } catch {
     return refuse(400, "Bad request.");
   }
   const chatId = isValidChatId(body.id) ? body.id : null;
+  const voiceMode = body.voice === true;
   if (!Array.isArray(body.messages) || body.messages.length === 0) return refuse(400, "Bad request.");
   const messages = body.messages as UIMessage[];
   const latest = messages[messages.length - 1];
@@ -113,7 +125,7 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: google(MODEL),
-    instructions: buildInstructions(catalog),
+    instructions: buildInstructions(catalog) + (voiceMode ? VOICE_INSTRUCTIONS : ""),
     messages: await convertToModelMessages(messages),
     tools,
     // book_appointment is hidden unless the patient is answering a read-back

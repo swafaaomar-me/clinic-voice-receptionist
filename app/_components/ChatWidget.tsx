@@ -2,9 +2,10 @@
 
 import { useChat } from "@ai-sdk/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { to12Hour } from "@/lib/opening-hours";
 import { OPEN_NOOR_EVENT } from "./TalkToNoorButton";
+import { languageOf, useVoice, type VoiceLang, type VoiceProblem } from "./useVoice";
 
 const SUGGESTIONS = [
   "I'd like to book a teeth cleaning",
@@ -47,13 +48,102 @@ function formatDay(date: string) {
   });
 }
 
-/** Renders one part of a message: text, a "working…" line, or a confirmation card. */
 /** True when the server turned the message away on purpose (flooding or a too-long message). */
 function isRefusal(error: Error): boolean {
   const status = (error as { statusCode?: number }).statusCode;
   return status === 413 || status === 429;
 }
 
+const VOICE_PROBLEMS: Record<VoiceProblem, string> = {
+  unsupported: "Talking isn't supported in this browser. Try Chrome or Edge, or type your message.",
+  blocked: "The microphone is blocked. Allow it from the icon in the address bar, or type instead.",
+  "no-microphone": "No microphone was found. You can type instead.",
+  "no-speech": "I didn't hear anything. Tap the microphone and speak when it turns red.",
+  offline: "Voice isn't available in this browser right now. Try Google Chrome or Microsoft Edge, or type instead.",
+  failed: "Voice didn't work just now. Please try again, or type instead.",
+};
+
+const LANGUAGE_NAMES: Record<VoiceLang, string> = {
+  en: "English",
+  ar: "Arabic",
+};
+
+/** The text Noor wrote in a message (without tool cards). */
+function textOf(message: UIMessage): string {
+  return message.parts
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .join(" ")
+    .trim();
+}
+
+function MicIcon() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      className="size-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+    </svg>
+  );
+}
+
+function SpeakerIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      className="size-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 9h4l5-4v14l-5-4H4z" />
+      {on ? <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" /> : <path d="m17 9 5 6m0-6-5 6" />}
+    </svg>
+  );
+}
+
+/**
+ * A small label that appears when an icon button is hovered or focused.
+ * Screen readers already get the button's aria-label, so the label itself is hidden from them.
+ */
+function Hint({
+  text,
+  place,
+  children,
+}: {
+  text: string;
+  place: "below-end" | "above-start" | "above-center";
+  children: React.ReactNode;
+}) {
+  const position = {
+    "below-end": "top-full right-0 mt-2",
+    "above-start": "bottom-full left-0 mb-2",
+    "above-center": "bottom-full left-1/2 mb-2 -translate-x-1/2",
+  }[place];
+  return (
+    <span className="group/hint relative inline-flex shrink-0">
+      {children}
+      <span
+        aria-hidden
+        className={`pointer-events-none absolute z-10 whitespace-nowrap rounded-lg bg-ink px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity delay-150 duration-150 group-hover/hint:opacity-100 group-has-[:focus-visible]/hint:opacity-100 motion-reduce:transition-none ${position}`}
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+/** Renders one part of a message: text, a "working…" line, or a confirmation card. */
 function MessagePart({ part }: { part: UIMessage["parts"][number] }) {
   if (part.type === "text") {
     return part.text ? <p className="whitespace-pre-wrap">{part.text}</p> : null;
@@ -100,10 +190,44 @@ export function ChatWidget() {
   const [input, setInput] = useState("");
   // Each conversation gets its own ID, so "New chat" starts a separate summary for staff
   const [chatId, setChatId] = useState(() => crypto.randomUUID());
-  const { messages, sendMessage, status, error, regenerate, stop } = useChat({ id: chatId });
+  // Spoken replies: on once the patient has used the microphone (or switches them on)
+  const [speakReplies, setSpeakReplies] = useState(false);
+  const [noVoiceFor, setNoVoiceFor] = useState<VoiceLang | null>(null);
+  const speakRepliesRef = useRef(false);
+  const speakRef = useRef<(text: string, lang: VoiceLang, onNoVoice?: (lang: VoiceLang) => void) => boolean>(() => false);
+  const changeSpeakReplies = useCallback((on: boolean) => {
+    speakRepliesRef.current = on;
+    setSpeakReplies(on);
+  }, []);
+
+  const { messages, sendMessage, status, error, regenerate, stop } = useChat({
+    id: chatId,
+    // Read Noor's reply aloud once it has fully arrived
+    onFinish: ({ message, isAbort, isError }) => {
+      if (isAbort || isError || !speakRepliesRef.current) return;
+      const text = textOf(message);
+      if (!text) return;
+      const lang = languageOf(text);
+      if (!speakRef.current(text, lang, setNoVoiceFor)) setNoVoiceFor(lang);
+    },
+  });
   const busy = status === "submitted" || status === "streaming";
   const inputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  const sendText = useCallback(
+    (text: string, viaVoice = false) => {
+      if (!text.trim()) return;
+      if (viaVoice) changeSpeakReplies(true);
+      // Tell the server when replies will be heard, so Noor keeps them short and easy to listen to
+      sendMessage({ text }, { body: { voice: viaVoice || speakReplies } });
+    },
+    [sendMessage, speakReplies, changeSpeakReplies],
+  );
+  const voice = useVoice((transcript) => sendText(transcript, true));
+  useEffect(() => {
+    speakRef.current = voice.speak;
+  }, [voice.speak]);
 
   // Open when any "Talk to Noor" button is pressed, optionally sending a first message
   useEffect(() => {
@@ -120,7 +244,11 @@ export function ChatWidget() {
   useEffect(() => {
     if (!open) return;
     inputRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      window.speechSynthesis?.cancel();
+      setOpen(false);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
@@ -132,11 +260,39 @@ export function ChatWidget() {
 
   function send(text: string) {
     if (!text.trim() || busy) return;
-    sendMessage({ text });
+    voice.stopSpeaking();
+    sendText(text);
     setInput("");
   }
 
   const last = messages[messages.length - 1];
+
+  // The microphone listens in the language of the latest message, unless the patient switched it
+  const lastText = last ? textOf(last) : "";
+  const [langChoice, setLangChoice] = useState<{
+    lang: VoiceLang;
+    afterText: string;
+  } | null>(null);
+  const voiceLang: VoiceLang =
+    langChoice && langChoice.afterText === lastText ? langChoice.lang : lastText ? languageOf(lastText) : "en";
+  const setVoiceLang = (lang: VoiceLang) => setLangChoice({ lang, afterText: lastText });
+
+  function startNewChat() {
+    stop();
+    voice.reset();
+    setNoVoiceFor(null);
+    setChatId(crypto.randomUUID());
+  }
+
+  function close() {
+    voice.reset();
+    setOpen(false);
+  }
+
+  function toggleMic() {
+    if (voice.listening) voice.stopListening();
+    else voice.startListening(voiceLang);
+  }
   const waitingForReply =
     status === "submitted" ||
     (status === "streaming" && last?.role === "assistant" && !last.parts.some((p) => p.type === "text" && p.text));
@@ -170,26 +326,41 @@ export function ChatWidget() {
           <p className="font-semibold">Noor</p>
           <p className="text-sm text-ink-soft">AI receptionist</p>
         </div>
+        {voice.canSpeak && (
+          <Hint text={speakReplies ? "Mute Noor's voice" : "Hear Noor's replies"} place="below-end">
+            <button
+              type="button"
+              onClick={() => {
+                if (speakReplies) voice.stopSpeaking();
+                changeSpeakReplies(!speakReplies);
+              }}
+              aria-pressed={speakReplies}
+              aria-label={speakReplies ? "Spoken replies on. Turn off" : "Spoken replies off. Turn on"}
+              className={`grid size-9 place-items-center rounded-full hover:bg-enamel ${speakReplies ? "text-gum" : "text-ink-soft"}`}
+            >
+              <SpeakerIcon on={speakReplies} />
+            </button>
+          </Hint>
+        )}
         {messages.length > 0 && (
           <button
             type="button"
-            onClick={() => {
-              stop();
-              setChatId(crypto.randomUUID());
-            }}
+            onClick={startNewChat}
             className="rounded-full px-3 py-1.5 text-sm text-ink-soft hover:bg-enamel hover:text-ink"
           >
             New chat
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label="Close chat"
-          className="grid size-9 place-items-center rounded-full text-xl text-ink-soft hover:bg-enamel hover:text-ink"
-        >
-          ×
-        </button>
+        <Hint text="Close chat" place="below-end">
+          <button
+            type="button"
+            onClick={close}
+            aria-label="Close chat"
+            className="grid size-9 place-items-center rounded-full text-xl text-ink-soft hover:bg-enamel hover:text-ink"
+          >
+            ×
+          </button>
+        </Hint>
       </header>
 
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4" aria-live="polite">
@@ -235,7 +406,10 @@ export function ChatWidget() {
         })}
 
         {waitingForReply && (
-          <div className="flex gap-1 self-start rounded-2xl rounded-bl-md bg-blush px-4 py-3.5" aria-label="Noor is typing">
+          <div
+            className="flex gap-1 self-start rounded-2xl rounded-bl-md bg-blush px-4 py-3.5"
+            aria-label="Noor is typing"
+          >
             {[0, 150, 300].map((delay) => (
               <span
                 key={delay}
@@ -254,7 +428,11 @@ export function ChatWidget() {
             ) : (
               <>
                 <p>Noor couldn&apos;t reply just now. This usually clears up in a moment.</p>
-                <button type="button" onClick={() => regenerate()} className="mt-2 font-medium text-gum hover:underline">
+                <button
+                  type="button"
+                  onClick={() => regenerate()}
+                  className="mt-2 font-medium text-gum hover:underline"
+                >
                   Try again
                 </button>
               </>
@@ -264,8 +442,33 @@ export function ChatWidget() {
         <div ref={endRef} />
       </div>
 
+      {(voice.problem || noVoiceFor || voice.speaking || voice.preparing) && (
+        <div className="flex items-start gap-3 border-t border-line bg-enamel px-4 py-2.5 text-sm" role="status">
+          <p className="flex-1">
+            {voice.problem
+              ? VOICE_PROBLEMS[voice.problem]
+              : noVoiceFor
+                ? `This device has no ${LANGUAGE_NAMES[noVoiceFor]} voice installed, so Noor's ${LANGUAGE_NAMES[noVoiceFor]} replies are shown as text only.`
+                : voice.preparing
+                  ? "Noor is about to speak…"
+                  : "Noor is speaking…"}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              voice.clearProblem();
+              setNoVoiceFor(null);
+              voice.stopSpeaking();
+            }}
+            className="font-medium text-gum hover:underline"
+          >
+            {(voice.speaking || voice.preparing) && !voice.problem && !noVoiceFor ? "Stop" : "OK"}
+          </button>
+        </div>
+      )}
+
       <form
-        className="flex gap-2 border-t border-line p-3"
+        className="flex items-center gap-2 border-t border-line p-3"
         onSubmit={(e) => {
           e.preventDefault();
           send(input);
@@ -274,21 +477,54 @@ export function ChatWidget() {
         <label htmlFor="noor-message" className="sr-only">
           Message Noor
         </label>
+        <Hint
+          text={
+            voiceLang === "en" ? "Switch to Arabic" : "Switch to English"
+          }
+          place="above-start"
+        >
+          <button
+            type="button"
+            onClick={() => setVoiceLang(voiceLang === "en" ? "ar" : "en")}
+            disabled={voice.listening}
+            aria-label={`Speaking language: ${LANGUAGE_NAMES[voiceLang]}. Switch to ${LANGUAGE_NAMES[voiceLang === "en" ? "ar" : "en"]}`}
+            className="grid h-10 min-w-10 shrink-0 place-items-center rounded-full border border-line px-2 text-sm font-semibold text-ink-soft hover:border-ink/40 hover:text-ink disabled:opacity-40"
+          >
+            {voiceLang === "en" ? "EN" : "ع"}
+          </button>
+        </Hint>
         <input
           id="noor-message"
           ref={inputRef}
-          value={input}
+          value={voice.listening ? voice.interim : input}
+          readOnly={voice.listening}
           dir="auto"
           autoComplete="off"
           maxLength={1000}
           onChange={(e) => setInput(e.currentTarget.value)}
-          placeholder="Type in English or Arabic…"
+          placeholder={voice.listening ? `Listening in ${LANGUAGE_NAMES[voiceLang]}…` : "Type or talk…"}
           className="min-w-0 flex-1 rounded-full border border-line bg-enamel px-4 py-2.5 text-[15px] outline-none focus:border-ink/40"
         />
+        <Hint text={voice.listening ? "Send" : "Speak"} place="above-center">
+          <button
+            type="button"
+            onClick={toggleMic}
+            disabled={busy && !voice.listening}
+            aria-pressed={voice.listening}
+            aria-label={voice.listening ? "Stop listening and send" : `Talk to Noor in ${LANGUAGE_NAMES[voiceLang]}`}
+            className={`grid size-10 shrink-0 place-items-center rounded-full disabled:opacity-40 ${
+              voice.listening
+                ? "animate-pulse bg-gum text-white motion-reduce:animate-none"
+                : "border border-line text-ink hover:border-gum/40 hover:text-gum"
+            }`}
+          >
+            <MicIcon />
+          </button>
+        </Hint>
         <button
           type="submit"
-          disabled={busy || !input.trim()}
-          className="rounded-full bg-gum px-5 text-[15px] font-medium text-white hover:bg-gum-dark disabled:opacity-40"
+          disabled={busy || voice.listening || !input.trim()}
+          className="h-10 rounded-full bg-gum px-4 text-[15px] font-medium text-white hover:bg-gum-dark disabled:opacity-40"
         >
           Send
         </button>
