@@ -1,5 +1,6 @@
-// Turns Noor's Arabic replies into natural speech with Gemini's text-to-speech model.
-// Browser voices read Saudi dialect badly, so Arabic goes through Gemini; English keeps the browser voice.
+// Turns Noor's replies into natural speech with Gemini's text-to-speech model.
+// Browser voices sound robotic (and can't do a Saudi accent), so replies go through Gemini first;
+// the chat widget falls back to the browser voice if this fails.
 
 // Newest first. GEMINI_TTS_MODEL in .env.local can override it.
 const MODELS = [process.env.GEMINI_TTS_MODEL, "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"].filter(
@@ -8,9 +9,14 @@ const MODELS = [process.env.GEMINI_TTS_MODEL, "gemini-3.1-flash-tts-preview", "g
 const VOICE = process.env.GEMINI_TTS_VOICE ?? "Aoede";
 
 // Gemini voices follow plain-language directions for accent and tone
-const ARABIC_STYLE =
-  "Read this aloud as a warm, polite young Saudi woman working at the reception of a private dental clinic in Riyadh. " +
-  "Natural Saudi (Riyadh) accent, friendly and professional, calm conversational pace. Read only the text, nothing else:";
+const STYLE = {
+  ar:
+    "Read this aloud as a warm, polite young Saudi woman working at the reception of a private dental clinic in Riyadh. " +
+    "Natural Saudi (Riyadh) accent, friendly and professional, calm conversational pace. Read only the text, nothing else:",
+  en:
+    "Read this aloud as a warm, friendly young woman working at the reception of a private dental clinic. " +
+    "Natural, relaxed and professional, like a real person on the phone, at a calm conversational pace. Read only the text, nothing else:",
+};
 
 /** Gemini returns raw 16-bit mono PCM at 24 kHz; a WAV header makes it playable in any browser. */
 export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
@@ -31,8 +37,8 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-/** Speaks Arabic text with Gemini. Returns a WAV file, or null if no model could do it (busy, quota, no access). */
-export async function speakArabic(text: string): Promise<Buffer | null> {
+/** Speaks a reply with Gemini. Returns a WAV file, or null if no model could do it (busy, quota, no access). */
+export async function speakReply(text: string, lang: "en" | "ar"): Promise<Buffer | null> {
   const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!key) return null;
 
@@ -42,7 +48,7 @@ export async function speakArabic(text: string): Promise<Buffer | null> {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${ARABIC_STYLE}\n${text}` }] }],
+          contents: [{ parts: [{ text: `${STYLE[lang]}\n${text}` }] }],
           generationConfig: {
             responseModalities: ["AUDIO"],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },

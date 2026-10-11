@@ -1,5 +1,7 @@
+import { getCatalog } from "./clinic";
+import { clinicHoursOn } from "./opening-hours";
 import { db } from "./supabase";
-import { addDays, riyadhInstant, riyadhToday, toRiyadh } from "./time";
+import { addDays, riyadhInstant, riyadhToday, toRiyadh, weekdayName, weekdayOf } from "./time";
 
 export interface StaffAppointment {
   id: number;
@@ -61,4 +63,73 @@ export async function listUpcomingAppointments(options: { days?: number; dentist
 export async function cancelAsStaff(id: number) {
   const { error } = await db().from("appointments").update({ status: "cancelled" }).eq("id", id).eq("status", "booked");
   if (error) throw new Error(`Could not cancel: ${error.message}`);
+}
+
+export interface ReminderAppointment {
+  id: number;
+  date: string;
+  time: string;
+  patientName: string;
+  patientPhone: string;
+  dentist: string;
+  dentistAr: string;
+  service: string;
+  serviceAr: string;
+  reminderSentAt: string | null;
+}
+
+/**
+ * The next day the clinic is open after today, and its booked appointments.
+ * Reminders go out the day before; on Thursday that means Saturday, because Friday is closed.
+ */
+export async function listReminders(
+  today: string = riyadhToday(),
+): Promise<{ date: string; closedDaysSkipped: string[]; appointments: ReminderAppointment[] }> {
+  const catalog = await getCatalog();
+  let date = addDays(today, 1);
+  const closedDaysSkipped: string[] = [];
+  for (let i = 0; i < 7 && !clinicHoursOn(catalog, weekdayOf(date)); i++) {
+    closedDaysSkipped.push(weekdayName(date));
+    date = addDays(date, 1);
+  }
+
+  const { data, error } = await db()
+    .from("appointments")
+    .select("id, starts_at, patient_name, patient_phone, reminder_sent_at, dentists(name, name_ar), services(name, name_ar)")
+    .eq("status", "booked")
+    .gte("starts_at", riyadhInstant(date, "00:00").toISOString())
+    .lt("starts_at", riyadhInstant(addDays(date, 1), "00:00").toISOString())
+    .order("starts_at");
+  if (error) throw new Error(`Could not load reminders: ${error.message}`);
+
+  return {
+    date,
+    closedDaysSkipped,
+    appointments: (data ?? []).map((a) => {
+      const dentist = a.dentists as unknown as { name: string; name_ar: string } | null;
+      const service = a.services as unknown as { name: string; name_ar: string } | null;
+      return {
+        id: a.id,
+        date,
+        time: toRiyadh(new Date(a.starts_at)).time,
+        patientName: a.patient_name,
+        patientPhone: a.patient_phone,
+        dentist: dentist?.name ?? "your dentist",
+        dentistAr: dentist?.name_ar ?? "الطبيب",
+        service: service?.name ?? "dental",
+        serviceAr: service?.name_ar ?? "موعد الأسنان",
+        reminderSentAt: a.reminder_sent_at,
+      };
+    }),
+  };
+}
+
+/** Notes that staff sent a reminder for this appointment. */
+export async function markReminderSent(id: number) {
+  const { error } = await db()
+    .from("appointments")
+    .update({ reminder_sent_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", "booked");
+  if (error) throw new Error(`Could not save reminder: ${error.message}`);
 }

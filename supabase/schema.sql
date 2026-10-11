@@ -58,6 +58,7 @@ create table appointments (
                  check (status in ('booked', 'cancelled', 'completed')),
   notes          text,
   created_at     timestamptz not null default now(),
+  reminder_sent_at timestamptz,  -- when staff last sent a WhatsApp reminder
   check (ends_at > starts_at),
   -- The database itself refuses two active bookings for the same dentist that overlap in time
   constraint no_double_booking exclude using gist (

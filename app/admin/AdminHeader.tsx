@@ -4,6 +4,7 @@ import { signOut } from "./actions";
 
 const TABS = [
   { href: "/admin", label: "Appointments" },
+  { href: "/admin/reminders", label: "Reminders" },
   { href: "/admin/conversations", label: "Conversations" },
   { href: "/admin/security", label: "Security" },
 ] as const;
@@ -32,7 +33,7 @@ export async function AdminHeader({ current }: { current: (typeof TABS)[number][
           </form>
         </div>
       </div>
-      <nav aria-label="Staff pages" className="mx-auto mt-3 flex max-w-5xl gap-5 overflow-x-auto px-5 sm:gap-6 sm:px-8">
+      <nav aria-label="Staff pages" className="mx-auto mt-3 flex max-w-5xl gap-4 overflow-x-auto px-5 [mask-image:linear-gradient(to_right,black_85%,transparent)] sm:gap-6 sm:px-8 sm:[mask-image:none]">
         {TABS.map((tab) => {
           const active = tab.href === current;
           return (
@@ -40,7 +41,7 @@ export async function AdminHeader({ current }: { current: (typeof TABS)[number][
               key={tab.href}
               href={tab.href}
               aria-current={active ? "page" : undefined}
-              className={`whitespace-nowrap border-b-2 pb-3 text-[15px] ${
+              className={`whitespace-nowrap border-b-2 pb-3 text-sm sm:text-[15px] ${
                 active ? "border-gum font-semibold text-ink" : "border-transparent text-ink-soft hover:text-ink"
               }`}
             >

@@ -110,7 +110,25 @@ function subscribeToVoices(onChange: () => void) {
   return () => window.speechSynthesis.removeEventListener("voiceschanged", update);
 }
 
-export function useVoice(onFinalTranscript: (text: string) => void) {
+/** How long the patient must be quiet before their words are sent. Thinking pauses are shorter than this. */
+const SILENCE_MS: Record<VoiceLang, number> = { en: 1500, ar: 1700 };
+/** Longer pause allowed while the patient is reading out a number, since people pause between digit groups. */
+const NUMBER_SILENCE_MS = 3000;
+const ENDS_WITH_NUMBER =
+  /([0-9\u0660-\u0669]|\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)|(صفر|واحد|اثنين|اثنان|ثلاثة|ثلاث|أربعة|اربعة|خمسة|خمس|ستة|ست|سبعة|سبع|ثمانية|ثمان|تسعة|تسع))\s*[.,،]?$/i;
+/** Stop listening if nothing at all is said for this long. */
+const NOTHING_HEARD_MS = 8000;
+
+interface VoiceCallbacks {
+  /** The patient finished speaking; send their words. */
+  onTranscript: (text: string) => void;
+  /** Listening ended. heardNothing is true when the patient said nothing at all. */
+  onListeningEnd?: (heardNothing: boolean) => void;
+  /** Noor finished reading a reply aloud (not called when she is interrupted). */
+  onSpeechDone?: () => void;
+}
+
+export function useVoice(callbacks: VoiceCallbacks) {
   const canListen = useSyncExternalStore(noop, () => recognitionClass() !== null, () => false);
   const canSpeak = useSyncExternalStore(noop, () => "speechSynthesis" in window, () => false);
   const voices = useSyncExternalStore(subscribeToVoices, () => installedVoices, () => installedVoices);
@@ -124,10 +142,16 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
 
   const recognitionRef = useRef<Recognition | null>(null);
   const finalTextRef = useRef("");
-  const onFinalRef = useRef(onFinalTranscript);
+  const lastInterimRef = useRef("");
+  const callbacksRef = useRef(callbacks);
   useEffect(() => {
-    onFinalRef.current = onFinalTranscript;
-  }, [onFinalTranscript]);
+    callbacksRef.current = callbacks;
+  }, [callbacks]);
+  const holdingRef = useRef(false); // push-to-talk: keep listening until the button is released
+  const heardRef = useRef(false);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nothingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const langRef = useRef<VoiceLang>("en");
 
   // Stop talking and listening if the chat disappears
   useEffect(
@@ -168,7 +192,11 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
         utterance.lang = voice.lang;
         utterance.rate = lang === "ar" ? 0.95 : 1;
         if (i === 0) utterance.onstart = () => setSpeaking(true);
-        if (i === pieces.length - 1) utterance.onend = () => setSpeaking(false);
+        if (i === pieces.length - 1)
+          utterance.onend = () => {
+            setSpeaking(false);
+            callbacksRef.current.onSpeechDone?.();
+          };
         utterance.onerror = () => setSpeaking(false);
         synth.speak(utterance);
       });
@@ -178,14 +206,13 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
   );
 
   /**
-   * Reads one of Noor's replies aloud.
-   * Arabic uses Gemini's natural voice (browser voices can't do a Saudi accent), with the browser voice as a backup.
+   * Reads one of Noor's replies aloud with Gemini's natural voice, falling back to the browser's own voice
+   * if Gemini is busy or out of free quota.
    * Returns false, or calls onNoVoice later, when there is no way to speak that language on this device.
    */
   const speak = useCallback(
     (text: string, lang: VoiceLang = languageOf(text), onNoVoice?: (lang: VoiceLang) => void): boolean => {
       stopSpeaking();
-      if (lang !== "ar") return speakWithBrowser(text, lang);
 
       const request = new AbortController();
       voiceRequestRef.current = request;
@@ -193,13 +220,13 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
       const fallBack = () => {
         if (request.signal.aborted) return; // the patient interrupted, so stay quiet
         setPreparing(false);
-        if (!speakWithBrowser(text, "ar")) onNoVoice?.("ar");
+        if (!speakWithBrowser(text, lang)) onNoVoice?.(lang);
       };
 
       fetch("/api/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: textForSpeech(text, "ar") }),
+        body: JSON.stringify({ text: textForSpeech(text, lang), lang }),
         signal: request.signal,
       })
         .then((response) => (response.ok ? response.blob() : Promise.reject(new Error(String(response.status)))))
@@ -215,6 +242,7 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
           audio.onended = () => {
             setSpeaking(false);
             URL.revokeObjectURL(url);
+            callbacksRef.current.onSpeechDone?.();
           };
           return audio.play();
         })
@@ -224,36 +252,73 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
     [speakWithBrowser, stopSpeaking],
   );
 
+  const clearTimers = () => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (nothingTimerRef.current) clearTimeout(nothingTimerRef.current);
+    silenceTimerRef.current = null;
+    nothingTimerRef.current = null;
+  };
+
+  /** Ends listening; whatever was heard is sent. */
   const stopListening = useCallback(() => {
+    clearTimers();
+    holdingRef.current = false;
     recognitionRef.current?.stop(); // ends after processing what was already heard
   }, []);
 
-  /** Starts listening. Speech ends automatically when the patient pauses, then the text is sent. */
+  /** Waits for a real pause before sending, so thinking pauses don't cut the patient off. */
+  const restartSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (holdingRef.current) return; // push-to-talk sends on release instead
+    const midNumber = ENDS_WITH_NUMBER.test(lastInterimRef.current.trim());
+    silenceTimerRef.current = setTimeout(
+      () => recognitionRef.current?.stop(),
+      midNumber ? NUMBER_SILENCE_MS : SILENCE_MS[langRef.current],
+    );
+  }, []);
+
+  /**
+   * Starts listening. With hold=true it keeps listening until releaseHold() (push-to-talk);
+   * otherwise it sends automatically once the patient pauses.
+   */
   const startListening = useCallback(
-    (lang: VoiceLang) => {
+    (lang: VoiceLang, options: { hold?: boolean } = {}) => {
       const RecognitionClass = recognitionClass();
       if (!RecognitionClass) {
         setProblem("unsupported");
         return;
       }
       stopSpeaking(); // talking over Noor interrupts her
-      recognitionRef.current?.abort();
+      const previous = recognitionRef.current;
+      recognitionRef.current = null; // so the old session ends without sending anything
+      previous?.abort();
+      clearTimers();
 
       const recognition = new RecognitionClass();
       recognition.lang = LOCALES[lang];
       recognition.interimResults = true; // show words as they are recognised
-      recognition.continuous = false; // stop at the first pause
+      recognition.continuous = true; // keep going through short pauses; our own timer decides when they're done
       recognition.maxAlternatives = 1;
       finalTextRef.current = "";
+      heardRef.current = false;
+      holdingRef.current = Boolean(options.hold);
+      langRef.current = lang;
 
       recognition.onresult = (event) => {
         let interimText = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
-          if (result.isFinal) finalTextRef.current += result[0].transcript;
+          if (result.isFinal) finalTextRef.current += result[0].transcript + " ";
           else interimText += result[0].transcript;
         }
-        setInterim((finalTextRef.current + interimText).trim());
+        const heard = (finalTextRef.current + interimText).trim();
+        setInterim(heard);
+        lastInterimRef.current = heard;
+        if (heard) {
+          heardRef.current = true;
+          if (nothingTimerRef.current) clearTimeout(nothingTimerRef.current);
+          restartSilenceTimer();
+        }
       };
       recognition.onerror = (event) => {
         const problems: Record<string, VoiceProblem> = {
@@ -266,30 +331,57 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
         if (event.error !== "aborted") setProblem(problems[event.error] ?? "failed");
       };
       recognition.onend = () => {
+        clearTimers();
+        holdingRef.current = false;
         setListening(false);
         setInterim("");
+        if (recognitionRef.current !== recognition) return; // replaced by a newer session
         recognitionRef.current = null;
-        const text = finalTextRef.current.trim();
-        if (text) onFinalRef.current(text);
+        const text = finalTextRef.current.trim() || (heardRef.current ? lastInterimRef.current : "");
+        lastInterimRef.current = "";
+        if (text) callbacksRef.current.onTranscript(text);
+        callbacksRef.current.onListeningEnd?.(!text);
       };
 
       recognitionRef.current = recognition;
       setProblem(null);
       setInterim("");
       setListening(true);
+      // Nothing said at all? Stop instead of listening forever.
+      nothingTimerRef.current = setTimeout(() => {
+        if (!heardRef.current && !holdingRef.current) {
+          setProblem("no-speech");
+          recognition.stop();
+        }
+      }, NOTHING_HEARD_MS);
       try {
         recognition.start();
       } catch {
+        clearTimers();
         setListening(false);
         setProblem("failed");
       }
     },
-    [stopSpeaking],
+    [stopSpeaking, restartSilenceTimer],
+  );
+
+  /** Push-to-talk released: send now. Or, with keepListening, switch to "send when they pause". */
+  const releaseHold = useCallback(
+    (keepListening: boolean) => {
+      holdingRef.current = false;
+      if (!keepListening) stopListening();
+      else if (heardRef.current) restartSilenceTimer();
+    },
+    [stopListening, restartSilenceTimer],
   );
 
   /** Stops everything, e.g. when the chat is closed. */
   const reset = useCallback(() => {
-    recognitionRef.current?.abort();
+    clearTimers();
+    holdingRef.current = false;
+    const current = recognitionRef.current;
+    recognitionRef.current = null; // abandon without sending
+    current?.abort();
     stopSpeaking();
     setListening(false);
     setInterim("");
@@ -308,6 +400,7 @@ export function useVoice(onFinalTranscript: (text: string) => void) {
     clearProblem: () => setProblem(null),
     startListening,
     stopListening,
+    releaseHold,
     speak,
     stopSpeaking,
     reset,

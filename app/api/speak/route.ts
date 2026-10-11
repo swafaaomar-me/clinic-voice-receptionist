@@ -1,4 +1,4 @@
-import { speakArabic } from "@/lib/speech";
+import { speakReply } from "@/lib/speech";
 import { checkSpeakLimit, clientIp } from "@/lib/security";
 
 // Gemini can take a few seconds to produce the audio
@@ -7,18 +7,19 @@ export const maxDuration = 30;
 const MAX_CHARS = 600;
 
 /**
- * Turns one of Noor's Arabic replies into speech with Gemini's voice.
+ * Turns one of Noor's replies into speech with Gemini's voice.
  * The chat widget falls back to the browser's own voice whenever this doesn't return audio.
  */
 export async function POST(req: Request) {
   let text: unknown;
+  let lang: unknown;
   try {
-    ({ text } = await req.json());
+    ({ text, lang } = await req.json());
   } catch {
     return new Response("Bad request.", { status: 400 });
   }
-  // Only short Arabic text, so this can't be used as a free general-purpose voice service
-  if (typeof text !== "string" || !text.trim() || text.length > MAX_CHARS || !/[؀-ۿ]/.test(text)) {
+  // Only short replies in our two languages, so this can't be used as a free general-purpose voice service
+  if (typeof text !== "string" || !text.trim() || text.length > MAX_CHARS || (lang !== "en" && lang !== "ar")) {
     return new Response("Bad request.", { status: 400 });
   }
 
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     console.error("Speak limit check failed:", error);
   }
 
-  const audio = await speakArabic(text.trim());
+  const audio = await speakReply(text.trim(), lang);
   if (!audio) return new Response("Voice unavailable.", { status: 503 });
 
   return new Response(new Uint8Array(audio), {

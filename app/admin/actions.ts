@@ -4,7 +4,7 @@ import { refresh } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { endSession, isSignedIn, passwordIsCorrect, startSession } from "@/lib/admin-auth";
-import { cancelAsStaff } from "@/lib/admin-data";
+import { cancelAsStaff, markReminderSent } from "@/lib/admin-data";
 import { clientIp, loginLockStatus, recordFailedLogin } from "@/lib/security";
 
 export async function signIn(formData: FormData) {
@@ -45,5 +45,11 @@ export async function cancelAppointment(id: number) {
   // Every action checks the session itself; hiding the button isn't enough
   if (!(await isSignedIn())) redirect("/admin/login");
   await cancelAsStaff(id);
+  refresh();
+}
+
+export async function reminderSent(id: number) {
+  if (!(await isSignedIn())) redirect("/admin/login");
+  await markReminderSent(id);
   refresh();
 }

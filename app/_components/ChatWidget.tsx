@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { to12Hour } from "@/lib/opening-hours";
 import { OPEN_NOOR_EVENT } from "./TalkToNoorButton";
 import { languageOf, useVoice, type VoiceLang, type VoiceProblem } from "./useVoice";
@@ -67,6 +67,9 @@ const LANGUAGE_NAMES: Record<VoiceLang, string> = {
   en: "English",
   ar: "Arabic",
 };
+
+/** Holding the mic at least this long means push-to-talk; a shorter press is a tap. */
+const HOLD_MS = 450;
 
 /** The text Noor wrote in a message (without tool cards). */
 function textOf(message: UIMessage): string {
@@ -200,15 +203,32 @@ export function ChatWidget() {
     setSpeakReplies(on);
   }, []);
 
+  // Conversation mode: after Noor answers out loud, the microphone opens again by itself
+  const [conversation, setConversation] = useState(false);
+  const conversationRef = useRef(false);
+  const changeConversation = useCallback((on: boolean) => {
+    conversationRef.current = on;
+    setConversation(on);
+  }, []);
+  const listenAgainRef = useRef<() => void>(() => {});
+
   const { messages, sendMessage, status, error, regenerate, stop } = useChat({
     id: chatId,
     // Read Noor's reply aloud once it has fully arrived
     onFinish: ({ message, isAbort, isError }) => {
+      if (isError) changeConversation(false);
       if (isAbort || isError || !speakRepliesRef.current) return;
+      const listenAgainIfTalking = () => {
+        if (conversationRef.current) listenAgainRef.current();
+      };
       const text = textOf(message);
-      if (!text) return;
+      if (!text) return listenAgainIfTalking();
       const lang = languageOf(text);
-      if (!speakRef.current(text, lang, setNoVoiceFor)) setNoVoiceFor(lang);
+      const noVoice = (l: VoiceLang) => {
+        setNoVoiceFor(l);
+        listenAgainIfTalking();
+      };
+      if (!speakRef.current(text, lang, noVoice)) noVoice(lang);
     },
   });
   const busy = status === "submitted" || status === "streaming";
@@ -224,7 +244,21 @@ export function ChatWidget() {
     },
     [sendMessage, speakReplies, changeSpeakReplies],
   );
-  const voice = useVoice((transcript) => sendText(transcript, true));
+  const voice = useVoice(
+    useMemo(
+      () => ({
+        onTranscript: (transcript: string) => sendText(transcript, true),
+        // Silence in conversation mode means the patient has stepped away: stop listening for now
+        onListeningEnd: (heardNothing: boolean) => {
+          if (heardNothing && conversationRef.current) changeConversation(false);
+        },
+        onSpeechDone: () => {
+          if (conversationRef.current) listenAgainRef.current();
+        },
+      }),
+      [sendText, changeConversation],
+    ),
+  );
   useEffect(() => {
     speakRef.current = voice.speak;
   }, [voice.speak]);
@@ -260,6 +294,7 @@ export function ChatWidget() {
 
   function send(text: string) {
     if (!text.trim() || busy) return;
+    changeConversation(false); // typing means they've switched to text
     voice.stopSpeaking();
     sendText(text);
     setInput("");
@@ -279,19 +314,73 @@ export function ChatWidget() {
 
   function startNewChat() {
     stop();
+    changeConversation(false);
     voice.reset();
     setNoVoiceFor(null);
     setChatId(crypto.randomUUID());
   }
 
   function close() {
+    changeConversation(false);
     voice.reset();
     setOpen(false);
   }
 
-  function toggleMic() {
-    if (voice.listening) voice.stopListening();
-    else voice.startListening(voiceLang);
+  // Lets the "listen again" callback use the current language
+  const { startListening } = voice;
+  useEffect(() => {
+    listenAgainRef.current = () => startListening(voiceLang);
+  }, [startListening, voiceLang]);
+
+  // One microphone button, two ways to use it:
+  //  - tap: conversation mode (talk, Noor answers out loud, the mic opens again by itself)
+  //  - hold: push-to-talk (speak while holding, release to send)
+  const pressRef = useRef<{ start: number; startedListening: boolean } | null>(null);
+
+  function micDown(e: React.PointerEvent<HTMLButtonElement>) {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (voice.listening) {
+      pressRef.current = { start: Date.now(), startedListening: false };
+      return;
+    }
+    voice.startListening(voiceLang, { hold: true });
+    pressRef.current = { start: Date.now(), startedListening: true };
+  }
+
+  function micUp() {
+    const press = pressRef.current;
+    pressRef.current = null;
+    if (!press) return;
+    if (!press.startedListening) {
+      // Tapped while listening: send what was said and leave conversation mode
+      changeConversation(false);
+      voice.stopListening();
+      return;
+    }
+    if (Date.now() - press.start >= HOLD_MS) {
+      voice.releaseHold(false); // push-to-talk: send now
+    } else {
+      changeConversation(true);
+      voice.releaseHold(true); // tap: keep listening and send when they pause
+    }
+  }
+
+  /** Keyboard users (Enter/Space on the button) get conversation mode. */
+  function micKey(e: React.MouseEvent<HTMLButtonElement>) {
+    if (e.detail !== 0) return; // a real click is handled by the pointer events
+    if (voice.listening) {
+      changeConversation(false);
+      voice.stopListening();
+    } else {
+      changeConversation(true);
+      voice.startListening(voiceLang);
+    }
+  }
+
+  function endConversation() {
+    changeConversation(false);
+    voice.reset();
   }
   const waitingForReply =
     status === "submitted" ||
@@ -442,28 +531,43 @@ export function ChatWidget() {
         <div ref={endRef} />
       </div>
 
-      {(voice.problem || noVoiceFor || voice.speaking || voice.preparing) && (
+      {(voice.problem || noVoiceFor || voice.speaking || voice.preparing || conversation) && (
         <div className="flex items-start gap-3 border-t border-line bg-enamel px-4 py-2.5 text-sm" role="status">
           <p className="flex-1">
             {voice.problem
               ? VOICE_PROBLEMS[voice.problem]
               : noVoiceFor
                 ? `This device has no ${LANGUAGE_NAMES[noVoiceFor]} voice installed, so Noor's ${LANGUAGE_NAMES[noVoiceFor]} replies are shown as text only.`
-                : voice.preparing
-                  ? "Noor is about to speak…"
-                  : "Noor is speaking…"}
+                : voice.listening
+                  ? "I'm listening. Pause when you've finished."
+                  : voice.preparing
+                    ? "Noor is about to speak…"
+                    : voice.speaking
+                      ? conversation
+                        ? "Noor is speaking. Tap the mic to interrupt."
+                        : "Noor is speaking…"
+                      : "Conversation mode is on."}
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              voice.clearProblem();
-              setNoVoiceFor(null);
-              voice.stopSpeaking();
-            }}
-            className="font-medium text-gum hover:underline"
-          >
-            {(voice.speaking || voice.preparing) && !voice.problem && !noVoiceFor ? "Stop" : "OK"}
-          </button>
+          {voice.problem || noVoiceFor ? (
+            <button
+              type="button"
+              onClick={() => {
+                voice.clearProblem();
+                setNoVoiceFor(null);
+              }}
+              className="font-medium text-gum hover:underline"
+            >
+              OK
+            </button>
+          ) : conversation ? (
+            <button type="button" onClick={endConversation} className="font-medium text-gum hover:underline">
+              End
+            </button>
+          ) : (
+            <button type="button" onClick={() => voice.stopSpeaking()} className="font-medium text-gum hover:underline">
+              Stop
+            </button>
+          )}
         </div>
       )}
 
@@ -505,17 +609,23 @@ export function ChatWidget() {
           placeholder={voice.listening ? `Listening in ${LANGUAGE_NAMES[voiceLang]}…` : "Type or talk…"}
           className="min-w-0 flex-1 rounded-full border border-line bg-enamel px-4 py-2.5 text-[15px] outline-none focus:border-ink/40"
         />
-        <Hint text={voice.listening ? "Send" : "Speak"} place="above-center">
+        <Hint text={voice.listening ? "Tap to send" : "Tap to chat · hold to talk"} place="above-center">
           <button
             type="button"
-            onClick={toggleMic}
-            disabled={busy && !voice.listening}
+            onPointerDown={micDown}
+            onPointerUp={micUp}
+            onPointerCancel={micUp}
+            onClick={micKey}
+            onContextMenu={(e) => e.preventDefault()}
+            disabled={busy && !voice.listening && !conversation}
             aria-pressed={voice.listening}
             aria-label={voice.listening ? "Stop listening and send" : `Talk to Noor in ${LANGUAGE_NAMES[voiceLang]}`}
-            className={`grid size-10 shrink-0 place-items-center rounded-full disabled:opacity-40 ${
+            className={`grid size-10 shrink-0 touch-none select-none place-items-center rounded-full disabled:opacity-40 ${
               voice.listening
                 ? "animate-pulse bg-gum text-white motion-reduce:animate-none"
-                : "border border-line text-ink hover:border-gum/40 hover:text-gum"
+                : conversation
+                  ? "border-2 border-gum text-gum"
+                  : "border border-line text-ink hover:border-gum/40 hover:text-gum"
             }`}
           >
             <MicIcon />
