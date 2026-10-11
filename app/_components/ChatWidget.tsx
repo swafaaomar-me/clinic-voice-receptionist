@@ -329,7 +329,7 @@ export function ChatWidget() {
   // Lets the "listen again" callback use the current language
   const { startListening } = voice;
   useEffect(() => {
-    listenAgainRef.current = () => startListening(voiceLang);
+    listenAgainRef.current = () => startListening(voiceLang, { automatic: true });
   }, [startListening, voiceLang]);
 
   // One microphone button, two ways to use it:

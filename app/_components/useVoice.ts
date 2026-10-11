@@ -345,7 +345,7 @@ export function useVoice(callbacks: VoiceCallbacks) {
    * otherwise it sends automatically once the patient pauses.
    */
   const startListening = useCallback(
-    (lang: VoiceLang, options: { hold?: boolean } = {}) => {
+    (lang: VoiceLang, options: { hold?: boolean; automatic?: boolean } = {}) => {
       const RecognitionClass = recognitionClass();
       if (!RecognitionClass) {
         setProblem("unsupported");
@@ -365,6 +365,8 @@ export function useVoice(callbacks: VoiceCallbacks) {
       finalTextRef.current = "";
       heardRef.current = false;
       holdingRef.current = Boolean(options.hold);
+      // When the mic reopened by itself (conversation mode), silence just means the patient is done: no error message
+      const quietIfSilent = Boolean(options.automatic);
       langRef.current = lang;
 
       recognition.onresult = (event) => {
@@ -391,7 +393,8 @@ export function useVoice(callbacks: VoiceCallbacks) {
           "no-speech": "no-speech",
           network: "offline",
         };
-        if (event.error !== "aborted") setProblem(problems[event.error] ?? "failed");
+        if (event.error === "aborted" || (event.error === "no-speech" && quietIfSilent)) return;
+        setProblem(problems[event.error] ?? "failed");
       };
       recognition.onend = () => {
         clearTimers();
@@ -413,7 +416,7 @@ export function useVoice(callbacks: VoiceCallbacks) {
       // Nothing said at all? Stop instead of listening forever.
       nothingTimerRef.current = setTimeout(() => {
         if (!heardRef.current && !holdingRef.current) {
-          setProblem("no-speech");
+          if (!quietIfSilent) setProblem("no-speech");
           recognition.stop();
         }
       }, NOTHING_HEARD_MS);
