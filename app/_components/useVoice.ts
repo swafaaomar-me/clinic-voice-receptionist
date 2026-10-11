@@ -61,12 +61,16 @@ export function textForSpeech(text: string, lang: VoiceLang): string {
 
 /** Splits text into sentences: Chrome cuts off long speech, so we queue short pieces. */
 export function sentences(text: string): string[] {
-  const pieces = text.match(/[^.!?؟\n]+[.!?؟]*/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
-  // Don't break after titles like "Dr." or numbers like "10." — join them to what follows
+  // Break after . ! ? or ؟ followed by a space or line break (so "4.5" and "10:00" stay whole)
+  const pieces = text
+    .split(/(?<=[.!?؟])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Don't break after titles like "Dr." — join them to what follows
   const joined: string[] = [];
   for (const piece of pieces) {
     const previous = joined[joined.length - 1];
-    if (previous && /(\b(Dr|Mr|Mrs|Ms|St|No)\.|\bد\.|\d\.)$/i.test(previous)) joined[joined.length - 1] = `${previous} ${piece}`;
+    if (previous && /(\b(Dr|Mr|Mrs|Ms|St|No)\.|\bد\.)$/i.test(previous)) joined[joined.length - 1] = `${previous} ${piece}`;
     else joined.push(piece);
   }
   return joined;
