@@ -96,6 +96,37 @@ export function pickVoice(voices: SpeechSynthesisVoice[], lang: VoiceLang): Spee
   return [...matching].sort((a, b) => score(b) - score(a))[0];
 }
 
+/** A fraction of a second of silence, used to unlock sound on iPhones. */
+let silentUrl: string | null = null;
+function silentWavUrl(): string {
+  if (silentUrl) return silentUrl;
+  const samples = 800; // 0.1 s at 8 kHz
+  const view = new DataView(new ArrayBuffer(44 + samples * 2));
+  const text = (offset: number, value: string) => [...value].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  view.setUint32(4, 36 + samples * 2, true);
+  text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 16000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, "data");
+  view.setUint32(40, samples * 2, true);
+  silentUrl = URL.createObjectURL(new Blob([view.buffer], { type: "audio/wav" }));
+  return silentUrl;
+}
+
+/** Plays the silent sound on a player, clearing any handlers from an earlier reply. */
+function playSilence(player: HTMLAudioElement): Promise<void> {
+  player.onplay = null;
+  player.onended = null;
+  player.src = silentWavUrl();
+  return player.play();
+}
+
 // Browser support and the list of installed voices, read in a way React can subscribe to
 const noop = () => () => {};
 let installedVoices: SpeechSynthesisVoice[] = [];
@@ -168,10 +199,37 @@ export function useVoice(callbacks: VoiceCallbacks) {
     if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
     voiceRequestRef.current?.abort();
     voiceRequestRef.current = null;
-    audioRef.current?.pause();
-    audioRef.current = null;
+    const player = audioRef.current;
+    if (player) {
+      // Keep the same player (iPhones only allow sound from one that was started by a tap); just silence it
+      player.onplay = null;
+      player.onended = null;
+      player.pause();
+    }
     setPreparing(false);
     setSpeaking(false);
+  }, []);
+
+  /**
+   * iPhones (and some browsers) only allow a page to play sound that was started by a tap.
+   * Noor's voice arrives a moment after the tap, so on the first touch we play a tiny silent
+   * sound on the same player; after that, the browser lets it play her replies.
+   */
+  const unlockedRef = useRef(false);
+  const unlockAudio = useCallback(() => {
+    if (unlockedRef.current || typeof window === "undefined") return;
+    const player = audioRef.current ?? new Audio();
+    audioRef.current = player;
+    playSilence(player)
+      .then(() => {
+        unlockedRef.current = true;
+      })
+      .catch(() => {});
+    if ("speechSynthesis" in window) {
+      const quiet = new SpeechSynthesisUtterance(" ");
+      quiet.volume = 0;
+      window.speechSynthesis.speak(quiet); // unlocks the browser voice too
+    }
   }, []);
 
   const hasVoiceFor = useCallback((lang: VoiceLang) => pickVoice(voices, lang) !== null, [voices]);
@@ -233,8 +291,9 @@ export function useVoice(callbacks: VoiceCallbacks) {
         .then((blob) => {
           if (request.signal.aborted) return;
           const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
+          const audio = audioRef.current ?? new Audio();
           audioRef.current = audio;
+          audio.src = url;
           audio.onplay = () => {
             setPreparing(false);
             setSpeaking(true);
@@ -403,6 +462,7 @@ export function useVoice(callbacks: VoiceCallbacks) {
     releaseHold,
     speak,
     stopSpeaking,
+    unlockAudio,
     reset,
   };
 }

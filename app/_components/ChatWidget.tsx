@@ -404,6 +404,9 @@ export function ChatWidget() {
   return (
     <section
       role="dialog"
+      // Any first tap or key press in the chat unlocks sound (needed for iPhones)
+      onPointerDownCapture={voice.unlockAudio}
+      onKeyDownCapture={voice.unlockAudio}
       aria-label="Chat with Noor, Smile Dental Clinic's receptionist"
       className="fixed inset-0 z-50 flex flex-col bg-paper sm:inset-auto sm:bottom-5 sm:right-5 sm:h-[min(640px,calc(100dvh-2.5rem))] sm:w-[400px] sm:rounded-[24px] sm:border sm:border-line sm:shadow-[0_24px_60px_-20px_rgba(15,42,51,0.45)]"
     >
