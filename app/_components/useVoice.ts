@@ -322,23 +322,30 @@ export function useVoice(callbacks: VoiceCallbacks) {
     nothingTimerRef.current = null;
   };
 
-  /** Ends listening; whatever was heard is sent. */
-  const stopListening = useCallback(() => {
+  // One "turn" of listening can span several recognizer sessions: phones (iPhone Safari, Chrome on Android)
+  // stop recognising after the first phrase, so we quietly restart them and keep adding to what was heard.
+  // Only our own pause timer (or the patient) decides when the turn is over.
+  const finishingRef = useRef(false); // we decided the turn is over
+  const fatalRef = useRef(false); // blocked mic etc.: don't restart
+  const committedRef = useRef(""); // text heard in earlier sessions of this turn
+  const restartsRef = useRef(0);
+
+  /** Ends the turn; whatever was heard is sent. */
+  const finishTurn = useCallback(() => {
     clearTimers();
     holdingRef.current = false;
-    recognitionRef.current?.stop(); // ends after processing what was already heard
+    finishingRef.current = true;
+    recognitionRef.current?.stop(); // its "end" event sends the text
   }, []);
+  const stopListening = finishTurn;
 
   /** Waits for a real pause before sending, so thinking pauses don't cut the patient off. */
   const restartSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (holdingRef.current) return; // push-to-talk sends on release instead
     const midNumber = ENDS_WITH_NUMBER.test(lastInterimRef.current.trim());
-    silenceTimerRef.current = setTimeout(
-      () => recognitionRef.current?.stop(),
-      midNumber ? NUMBER_SILENCE_MS : SILENCE_MS[langRef.current],
-    );
-  }, []);
+    silenceTimerRef.current = setTimeout(finishTurn, midNumber ? NUMBER_SILENCE_MS : SILENCE_MS[langRef.current]);
+  }, [finishTurn]);
 
   /**
    * Starts listening. With hold=true it keeps listening until releaseHold() (push-to-talk);
@@ -357,59 +364,87 @@ export function useVoice(callbacks: VoiceCallbacks) {
       previous?.abort();
       clearTimers();
 
-      const recognition = new RecognitionClass();
-      recognition.lang = LOCALES[lang];
-      recognition.interimResults = true; // show words as they are recognised
-      recognition.continuous = true; // keep going through short pauses; our own timer decides when they're done
-      recognition.maxAlternatives = 1;
       finalTextRef.current = "";
+      lastInterimRef.current = "";
+      committedRef.current = "";
       heardRef.current = false;
+      finishingRef.current = false;
+      fatalRef.current = false;
+      restartsRef.current = 0;
       holdingRef.current = Boolean(options.hold);
       // When the mic reopened by itself (conversation mode), silence just means the patient is done: no error message
       const quietIfSilent = Boolean(options.automatic);
       langRef.current = lang;
 
-      recognition.onresult = (event) => {
-        let interimText = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
-          if (result.isFinal) finalTextRef.current += result[0].transcript + " ";
-          else interimText += result[0].transcript;
-        }
-        const heard = (finalTextRef.current + interimText).trim();
-        setInterim(heard);
-        lastInterimRef.current = heard;
-        if (heard) {
-          heardRef.current = true;
-          if (nothingTimerRef.current) clearTimeout(nothingTimerRef.current);
-          restartSilenceTimer();
-        }
-      };
-      recognition.onerror = (event) => {
-        const problems: Record<string, VoiceProblem> = {
-          "not-allowed": "blocked",
-          "service-not-allowed": "blocked",
-          "audio-capture": "no-microphone",
-          "no-speech": "no-speech",
-          network: "offline",
-        };
-        if (event.error === "aborted" || (event.error === "no-speech" && quietIfSilent)) return;
-        setProblem(problems[event.error] ?? "failed");
-      };
-      recognition.onend = () => {
+      const sendTurn = () => {
         clearTimers();
         holdingRef.current = false;
+        recognitionRef.current = null;
         setListening(false);
         setInterim("");
-        if (recognitionRef.current !== recognition) return; // replaced by a newer session
-        recognitionRef.current = null;
-        const text = finalTextRef.current.trim() || (heardRef.current ? lastInterimRef.current : "");
+        const text = lastInterimRef.current.trim();
         lastInterimRef.current = "";
         if (text) callbacksRef.current.onTranscript(text);
         callbacksRef.current.onListeningEnd?.(!text);
       };
 
-      recognitionRef.current = recognition;
+      const beginSession = () => {
+        const recognition = new RecognitionClass();
+        recognition.lang = LOCALES[lang];
+        recognition.interimResults = true; // show words as they are recognised
+        recognition.continuous = true; // laptops keep going through pauses; phones may ignore this (handled in onend)
+        recognition.maxAlternatives = 1;
+        let sessionFinal = "";
+
+        recognition.onresult = (event) => {
+          let interimText = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            if (result.isFinal) sessionFinal += result[0].transcript + " ";
+            else interimText += result[0].transcript;
+          }
+          const heard = `${committedRef.current} ${sessionFinal}${interimText}`.replace(/\s+/g, " ").trim();
+          setInterim(heard);
+          lastInterimRef.current = heard;
+          if (heard) {
+            heardRef.current = true;
+            if (nothingTimerRef.current) clearTimeout(nothingTimerRef.current);
+            restartSilenceTimer();
+          }
+        };
+        recognition.onerror = (event) => {
+          // Silence and our own stop() aren't problems: the pause timer decides what happens next
+          if (event.error === "aborted" || event.error === "no-speech") return;
+          const problems: Record<string, VoiceProblem> = {
+            "not-allowed": "blocked",
+            "service-not-allowed": "blocked",
+            "audio-capture": "no-microphone",
+            network: "offline",
+          };
+          fatalRef.current = true;
+          setProblem(problems[event.error] ?? "failed");
+        };
+        recognition.onend = () => {
+          if (recognitionRef.current !== recognition) return; // replaced or abandoned
+          const browserStoppedEarly = !finishingRef.current && !fatalRef.current && restartsRef.current < 40;
+          if (browserStoppedEarly) {
+            // The phone stopped on its own: keep what we heard and listen again
+            committedRef.current = lastInterimRef.current;
+            restartsRef.current += 1;
+            try {
+              beginSession();
+              return;
+            } catch {
+              // fall through and send what we have
+            }
+          }
+          sendTurn();
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+      };
+
       setProblem(null);
       setInterim("");
       setListening(true);
@@ -417,28 +452,29 @@ export function useVoice(callbacks: VoiceCallbacks) {
       nothingTimerRef.current = setTimeout(() => {
         if (!heardRef.current && !holdingRef.current) {
           if (!quietIfSilent) setProblem("no-speech");
-          recognition.stop();
+          finishTurn();
         }
       }, NOTHING_HEARD_MS);
       try {
-        recognition.start();
+        beginSession();
       } catch {
         clearTimers();
+        recognitionRef.current = null;
         setListening(false);
         setProblem("failed");
       }
     },
-    [stopSpeaking, restartSilenceTimer],
+    [stopSpeaking, restartSilenceTimer, finishTurn],
   );
 
   /** Push-to-talk released: send now. Or, with keepListening, switch to "send when they pause". */
   const releaseHold = useCallback(
     (keepListening: boolean) => {
       holdingRef.current = false;
-      if (!keepListening) stopListening();
+      if (!keepListening) finishTurn();
       else if (heardRef.current) restartSilenceTimer();
     },
-    [stopListening, restartSilenceTimer],
+    [finishTurn, restartSilenceTimer],
   );
 
   /** Stops everything, e.g. when the chat is closed. */
