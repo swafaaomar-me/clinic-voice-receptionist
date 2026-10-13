@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { factsFromToolEvents, isValidChatId } from "@/lib/conversations";
+import { factsFromToolEvents, factsNote, isValidChatId } from "@/lib/conversations";
 
 describe("conversation summaries", () => {
   it("accepts real chat IDs and rejects junk", () => {
@@ -24,5 +24,16 @@ describe("conversation summaries", () => {
       { toolName: "cancel_appointment", output: { ok: true, cancelled_appointment_id: 9, patient_name: "Yousef", patient_phone: "0560606888" } },
     ]);
     expect(facts).toMatchObject({ outcome: "cancelled", appointmentId: 9, patientName: "Yousef" });
+  });
+
+  it("tells the summariser a read-back booking was never confirmed", () => {
+    const events = [
+      { toolName: "prepare_booking", output: { ok: true, patient_name: "Reem", patient_phone: "0553045701" } },
+    ];
+    const facts = factsFromToolEvents(events);
+    expect(facts.outcome).toBeNull();
+    expect(factsNote(facts, events)).toContain("NOT booked");
+    const booked = [...events, { toolName: "book_appointment", output: { ok: true, appointment_id: 7 } }];
+    expect(factsNote(factsFromToolEvents(booked), booked)).toContain("WAS saved");
   });
 });

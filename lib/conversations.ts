@@ -65,6 +65,21 @@ export function factsFromToolEvents(events: ToolEvent[]): ConversationFacts {
   return facts;
 }
 
+/**
+ * A line of hard facts for the summariser, so it never says "booked" when nothing was saved
+ * (e.g. Noor read the booking back but the patient never confirmed).
+ */
+export function factsNote(facts: ConversationFacts, events: ToolEvent[]): string {
+  if (facts.outcome === "booked") return "[FACT: an appointment WAS saved in this chat.]";
+  if (facts.outcome === "cancelled") return "[FACT: an appointment WAS cancelled in this chat. No new appointment was saved.]";
+  const prepared = events.some(
+    (e) => e.toolName === "prepare_booking" && (e.output as { ok?: boolean } | null)?.ok === true,
+  );
+  return prepared
+    ? "[FACT: NO appointment was saved. Noor read the details back, but the patient has NOT confirmed, so it is NOT booked. Say it is waiting for the patient's confirmation.]"
+    : "[FACT: NO appointment was saved or cancelled in this chat.]";
+}
+
 /** A plain-text transcript for the summariser, with tool actions noted in brackets. */
 export function transcriptOf(messages: UIMessage[], latestReply: string, latestEvents: ToolEvent[]): string {
   const lines: string[] = [];
@@ -99,7 +114,8 @@ export async function saveConversationSummary(options: {
   const userMessages = messages.filter((m) => m.role === "user").length;
   if (userMessages === 0) return;
 
-  const facts = factsFromToolEvents([...toolEventsFromMessages(messages), ...latestEvents]);
+  const allEvents = [...toolEventsFromMessages(messages), ...latestEvents];
+  const facts = factsFromToolEvents(allEvents);
 
   const { output } = await generateText({
     model: languageModel ?? google(process.env.SUMMARY_MODEL ?? model),
@@ -107,8 +123,9 @@ export async function saveConversationSummary(options: {
     instructions:
       "You write very short notes for dental clinic staff about chats between patients and Noor, the clinic's AI receptionist. " +
       "Write in English even if the chat was in Arabic. Mention the treatment, dentist, day and time when relevant. " +
-      "Don't include phone numbers. Don't add anything that isn't in the chat.",
-    prompt: transcriptOf(messages, latestReply, latestEvents),
+      "Don't include phone numbers. Don't add anything that isn't in the chat. " +
+      "The FACT line at the end is the truth about what was saved: never say something was booked or cancelled unless it says so.",
+    prompt: `${transcriptOf(messages, latestReply, latestEvents)}\n${factsNote(facts, allEvents)}`,
   });
 
   const { error } = await db()
